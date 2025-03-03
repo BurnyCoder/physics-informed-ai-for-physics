@@ -207,12 +207,24 @@ def main():
         untrained_errors = compute_pendulum_errors(untrained_times, untrained_thetas, untrained_omegas)
         random_errors = compute_pendulum_errors(times, random_thetas, random_omegas)
         
+        # Calculate average error across all metrics for a single summary value
+        true_avg_error = (true_errors['theta_error_mean'] + true_errors['omega_error_mean'] + true_errors['energy_error_mean']) / 3
+        pred_avg_error = (pred_errors['theta_error_mean'] + pred_errors['omega_error_mean'] + pred_errors['energy_error_mean']) / 3
+        untrained_avg_error = (untrained_errors['theta_error_mean'] + untrained_errors['omega_error_mean'] + untrained_errors['energy_error_mean']) / 3
+        random_avg_error = (random_errors['theta_error_mean'] + random_errors['omega_error_mean'] + random_errors['energy_error_mean']) / 3
+        
         print(f"\nTest trajectory {i+1}:")
         print(f"  Initial conditions: theta={initial_theta:.4f}, omega={initial_omega:.4f}")
-        print(f"  Mean physical error (ground truth): {np.mean(true_errors):.6f}")
-        print(f"  Mean physical error (trained model): {np.mean(pred_errors):.6f}")
-        print(f"  Mean physical error (untrained model): {np.mean(untrained_errors):.6f}")
-        print(f"  Mean physical error (random prediction): {np.mean(random_errors):.6f}")
+        print(f"  Average physical error (ground truth): {true_avg_error:.6f}")
+        print(f"  Average physical error (trained model): {pred_avg_error:.6f}")
+        print(f"  Average physical error (untrained model): {untrained_avg_error:.6f}")
+        print(f"  Average physical error (random prediction): {random_avg_error:.6f}")
+        
+        # Print detailed errors for the trained model
+        print(f"  Detailed errors for trained model:")
+        print(f"    Theta error: {pred_errors['theta_error_mean']:.6f} ± {pred_errors['theta_error_std']:.6f}")
+        print(f"    Omega error: {pred_errors['omega_error_mean']:.6f} ± {pred_errors['omega_error_std']:.6f}")
+        print(f"    Energy error: {pred_errors['energy_error_mean']:.6f} ± {pred_errors['energy_error_std']:.6f}")
         
         # Plot trajectory comparison
         plot_pendulum_trajectory(
