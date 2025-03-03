@@ -17,7 +17,8 @@ from training.trainer import PhysicsTrainer
 from utils.visualization import (
     plot_wave_field, 
     animate_wave_field, 
-    create_comparison_directory
+    create_comparison_directory,
+    generate_random_predictions
 )
 from utils.evaluation import compute_wave_errors
 
@@ -189,74 +190,60 @@ def generate_random_wave_fields(initial_wave, grid_size, num_steps, amplitude_ra
 
 
 def main():
-    """Train a wave propagation physics-informed neural network."""
-    # Parse command line arguments
+    """Main training function."""
     args = parse_args()
     
-    # Setup device
-    use_cuda = not args.no_cuda and torch.cuda.is_available()
-    device = torch.device("cuda" if use_cuda else "cpu")
+    # Set device
+    device = torch.device('cuda' if torch.cuda.is_available() and not args.no_cuda else 'cpu')
+    print(f"Using device: {device}")
     
-    # Create directories if they don't exist
+    # Create directories for output
     os.makedirs(args.checkpoint_dir, exist_ok=True)
-    os.makedirs(args.log_dir, exist_ok=True)
     os.makedirs(os.path.dirname(args.save_data_path), exist_ok=True)
-    
-    # Create comparison directory
-    comp_dir = create_comparison_directory(args.checkpoint_dir)
+    comparison_dir = create_comparison_directory('comparisons/wave')
     
     # Load or generate dataset
     if args.data_path and os.path.exists(args.data_path):
         print(f"Loading dataset from {args.data_path}")
         dataset = WaveDataset(data_path=args.data_path)
     else:
-        print(f"Generating wave dataset with grid size {args.grid_size} and {args.samples} time steps")
+        print(f"Generating new wave dataset with {args.samples} samples")
         dataset = WaveDataset(
-            generate=True,
-            grid_size=args.grid_size,
+            generate=True, 
             samples=args.samples,
-            save_path=args.save_data_path
+            grid_size=args.grid_size,
+            time_steps=args.time_steps,
+            wave_speed=args.wave_speed
         )
+        dataset.save_dataset(args.save_data_path)
+        print(f"Saved dataset to {args.save_data_path}")
     
-    # Split dataset into training and validation sets
+    # Split dataset into training and validation
     val_size = int(len(dataset) * args.val_split)
     train_size = len(dataset) - val_size
-    
     train_dataset, val_dataset = random_split(dataset, [train_size, val_size])
     
-    print(f"Training set size: {len(train_dataset)}")
-    print(f"Validation set size: {len(val_dataset)}")
+    train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True)
+    val_loader = DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False)
     
-    # Create data loaders
-    train_loader = DataLoader(
-        train_dataset,
-        batch_size=args.batch_size,
-        shuffle=True,
-        num_workers=4,
-        pin_memory=use_cuda
-    )
-    
-    val_loader = DataLoader(
-        val_dataset,
-        batch_size=args.batch_size,
-        shuffle=False,
-        num_workers=4,
-        pin_memory=use_cuda
-    )
-    
-    # Create model
+    # Create the model and untrained model (for comparison)
     model = WavePINN(
         grid_size=args.grid_size,
-        wave_speed=args.wave_speed,
         hidden_dim=args.hidden_dim,
         num_layers=args.num_layers
-    )
+    ).to(device)
     
-    # Create optimizer and scheduler
+    # Create untrained model with same architecture
+    untrained_model = WavePINN(
+        grid_size=args.grid_size,
+        hidden_dim=args.hidden_dim,
+        num_layers=args.num_layers
+    ).to(device)
+    
+    # Setup training
     optimizer = torch.optim.Adam(model.parameters(), lr=args.learning_rate)
-    scheduler = ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=5)
+    scheduler = ReduceLROnPlateau(optimizer, 'min', patience=5, factor=0.5, verbose=True)
     
-    # Create trainer
     trainer = PhysicsTrainer(
         model=model,
         data_loader=train_loader,
@@ -270,93 +257,141 @@ def main():
     
     # Train the model
     print("Starting training...")
-    history = trainer.train(
+    trainer.train(
         num_epochs=args.num_epochs,
         save_dir=args.checkpoint_dir,
         save_freq=args.save_freq
     )
     
-    # Plot loss history
-    trainer.plot_history(
-        history,
-        save_path=os.path.join(args.checkpoint_dir, 'loss_history.png')
-    )
+    # Number of steps to predict
+    num_prediction_steps = args.num_prediction_steps if hasattr(args, 'num_prediction_steps') else 20
     
-    # Generate wave propagation comparison
-    print("\nGenerating wave propagation comparison...")
-    
-    # Get 3 different samples from the validation set for testing
+    # Generate predictions for a test sample from validation set
     num_test_samples = min(3, len(val_dataset))
-    test_indices = np.random.choice(len(val_dataset), num_test_samples, replace=False)
     
-    for i, idx in enumerate(test_indices):
-        # Get a test sample
-        inputs, _ = val_dataset[idx]
-        sample_input = inputs.to(device)
+    for test_idx in range(num_test_samples):
+        print(f"\nGenerating predictions for test sample {test_idx+1}/{num_test_samples}")
         
-        # Generate ground truth propagation
-        print(f"\nGenerating ground truth and predictions for test sample {i+1}...")
+        # Get test sample
+        inputs, targets = val_dataset[test_idx]
+        initial_wave = inputs.unsqueeze(0).to(device)  # Add batch dimension
         
-        # Convert input tensor to numpy array for ground truth simulation
-        initial_wave = sample_input.cpu().numpy()
+        # Get parameters from dataset
+        grid_size = dataset.grid_size
+        dt = dataset.dt
+        dx = dataset.dx
+        wave_speed = dataset.wave_speed
         
         # Generate ground truth wave propagation
         true_wave_fields = propagate_wave_ground_truth(
-            initial_wave=initial_wave,
-            grid_size=args.grid_size,
-            num_steps=args.num_prediction_steps,
-            wave_speed=args.wave_speed
+            initial_wave.squeeze(0).cpu().numpy(),
+            grid_size=grid_size,
+            num_steps=num_prediction_steps,
+            wave_speed=wave_speed,
+            dt=dt,
+            dx=dx
         )
         
-        # Predict the next steps using the model
-        model.eval()
-        pred_wave_fields = [initial_wave]
-        
-        current_wave = sample_input
-        with torch.no_grad():
-            for _ in range(1, args.num_prediction_steps):
-                next_wave = model(current_wave.unsqueeze(0)).squeeze(0)
-                pred_wave_fields.append(next_wave.cpu().numpy())
-                current_wave = next_wave
-        
-        pred_wave_fields = np.array(pred_wave_fields)
-        
-        # Compute wave equation errors
-        errors = compute_wave_errors(
-            pred_wave_fields,
-            dt=model.dt,
-            dx=model.dx,
-            c=args.wave_speed
+        # Generate trained model predictions
+        pred_wave_fields = model.predict_wave_propagation(
+            initial_wave,
+            num_steps=num_prediction_steps
         )
+        pred_wave_fields = pred_wave_fields.cpu().numpy()
         
-        print(f"\nPhysical error metrics for test sample {i+1}:")
-        for key, value in errors.items():
-            print(f"{key}: {value:.6f}")
+        # Generate untrained model predictions
+        untrained_wave_fields = untrained_model.predict_wave_propagation(
+            initial_wave, 
+            num_steps=num_prediction_steps
+        )
+        untrained_wave_fields = untrained_wave_fields.cpu().numpy()
         
-        # Plot wave fields at specific time steps
-        plot_steps = [0, min(5, args.num_prediction_steps-1), args.num_prediction_steps-1]
-        
-        for step in plot_steps:
-            plot_wave_field(
-                wave_field=pred_wave_fields[step],
-                grid_size=args.grid_size,
-                title=f"Wave Field (Step {step})",
-                true_wave_field=true_wave_fields[step],
-                save_path=os.path.join(comp_dir, f'wave_field_comparison_{i+1}_step_{step}.png')
+        # Generate random predictions
+        random_wave_fields = np.zeros_like(true_wave_fields)
+        for t in range(num_prediction_steps):
+            # Generate random wave field based on initial range
+            initial_min = initial_wave.cpu().numpy().min()
+            initial_max = initial_wave.cpu().numpy().max()
+            random_wave_fields[t] = np.random.uniform(
+                initial_min, initial_max, size=(grid_size, grid_size)
             )
         
-        # Create animation
-        animate_wave_field(
-            wave_fields=pred_wave_fields,
-            grid_size=args.grid_size,
-            title=f"Wave Propagation Comparison {i+1}",
-            fps=4,
-            true_wave_fields=true_wave_fields,
-            save_path=os.path.join(comp_dir, f'wave_animation_comparison_{i+1}.gif')
+        # Compute errors
+        true_errors = compute_wave_errors(true_wave_fields, true_wave_fields)
+        pred_errors = compute_wave_errors(pred_wave_fields, true_wave_fields)
+        untrained_errors = compute_wave_errors(untrained_wave_fields, true_wave_fields)
+        random_errors = compute_wave_errors(random_wave_fields, true_wave_fields)
+        
+        # Calculate average errors
+        def calculate_avg_error(error_dict):
+            """Calculate average of all error metrics ending with '_mean'."""
+            mean_errors = [v for k, v in error_dict.items() if k.endswith('_mean')]
+            return sum(mean_errors) / len(mean_errors) if mean_errors else 0
+        
+        true_avg_error = calculate_avg_error(true_errors)
+        pred_avg_error = calculate_avg_error(pred_errors)
+        untrained_avg_error = calculate_avg_error(untrained_errors)
+        random_avg_error = calculate_avg_error(random_errors)
+        
+        # Print detailed errors for the trained model
+        print("\nDetailed errors for trained model:")
+        for key in [k for k in pred_errors.keys() if k.endswith('_mean')]:
+            std_key = key.replace('_mean', '_std')
+            metric_name = key.replace('_error_mean', '').capitalize()
+            print(f"  {metric_name}: {pred_errors[key]:.6f} ± {pred_errors[std_key]:.6f}")
+        
+        # Print error comparison
+        print("\nAverage error comparison:")
+        print(f"  Ground truth: {true_avg_error:.6f}")
+        print(f"  Trained model: {pred_avg_error:.6f}")
+        print(f"  Untrained model: {untrained_avg_error:.6f}")
+        print(f"  Random predictions: {random_avg_error:.6f}")
+        
+        improvement_over_untrained = (untrained_avg_error - pred_avg_error) / untrained_avg_error * 100
+        improvement_over_random = (random_avg_error - pred_avg_error) / random_avg_error * 100
+        
+        print(f"\nImprovement over untrained model: {improvement_over_untrained:.2f}%")
+        print(f"Improvement over random predictions: {improvement_over_random:.2f}%")
+        
+        # Save plots for specific timesteps
+        for t in [0, num_prediction_steps // 2, num_prediction_steps - 1]:
+            plot_save_path = os.path.join(
+                comparison_dir, 
+                f'wave_field_comparison_sample{test_idx+1}_t{t}.png'
+            )
+            
+            print(f"\nGenerating comparison plot at timestep {t}: {plot_save_path}")
+            
+            plot_wave_field(
+                pred_wave_fields[t],
+                true_wave_field=true_wave_fields[t],
+                untrained_wave_field=untrained_wave_fields[t],
+                random_wave_field=random_wave_fields[t],
+                title=f"Wave Field Comparison (Sample {test_idx+1}, t={t})",
+                save_path=plot_save_path
+            )
+        
+        # Save animation
+        animation_save_path = os.path.join(
+            comparison_dir, 
+            f'wave_animation_comparison_sample{test_idx+1}.gif'
         )
+        
+        print(f"Generating comparison animation: {animation_save_path}")
+        
+        animate_wave_field(
+            pred_wave_fields,
+            true_wave_fields=true_wave_fields,
+            untrained_wave_fields=untrained_wave_fields,
+            random_wave_fields=random_wave_fields,
+            title=f"Wave Propagation Comparison (Sample {test_idx+1})",
+            fps=10,
+            save_path=animation_save_path
+        )
+        
+        print(f"Saved visualizations for test sample {test_idx+1} to {comparison_dir}")
     
-    print(f"\nTraining complete! Model saved to {args.checkpoint_dir}")
-    print(f"Check the wave field plots and animations in {comp_dir}")
+    print("\nTraining and evaluation complete!")
 
 
 if __name__ == "__main__":
