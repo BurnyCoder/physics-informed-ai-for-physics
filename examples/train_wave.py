@@ -52,7 +52,7 @@ def parse_args():
                         help='Number of training epochs')
     parser.add_argument('--learning_rate', type=float, default=1e-3,
                         help='Learning rate for optimizer')
-    parser.add_argument('--physics_weight', type=float, default=0.5,
+    parser.add_argument('--physics_weight', type=float, default=0.7,
                         help='Weight for physics-informed loss (between 0 and 1)')
     
     parser.add_argument('--val_split', type=float, default=0.2,

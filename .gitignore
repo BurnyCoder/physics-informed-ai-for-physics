@@ -63,6 +63,6 @@ venv.bak/
 
 # Project specific
 logs/
-checkpoints/
+# checkpoints/
 *.npz
 data/datasets/*.npz 
