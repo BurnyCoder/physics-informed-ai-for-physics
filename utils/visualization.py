@@ -89,93 +89,74 @@ def animate_pendulum(times, thetas, L=1.0, title="Pendulum Animation", fps=30, s
         untrained_thetas (array, optional): Predictions from untrained model.
         random_thetas (array, optional): Random predictions.
     """
-    # Count how many models we need to display
-    model_count = 1  # Trained model
-    if true_thetas is not None:
-        model_count += 1
-    if untrained_thetas is not None:
-        model_count += 1
-    if random_thetas is not None:
-        model_count += 1
+    # Create fixed subplots for all possible models
+    fig = plt.figure(figsize=(16, 5))
+    gs = GridSpec(1, 4, figure=fig)
     
-    # Set up the figure and grid for multiple pendulums
-    fig = plt.figure(figsize=(model_count * 5, 6))
-    
-    # Create subplots for each model
+    # Setup axes, lines, and markers for each model
     axes = []
     lines = []
     bobs = []
     
-    # Determine number of columns and rows
-    cols = min(model_count, 4)  # Maximum 4 columns
-    rows = (model_count + cols - 1) // cols
+    # Create all four subplots, regardless of whether we have data for them
+    # This ensures consistent layout and positions
     
-    gs = GridSpec(rows, cols, figure=fig)
-    
-    # Add pendulums with appropriate titles and colors
-    plot_idx = 0
-    
-    # Trained model (always present)
-    ax = fig.add_subplot(gs[plot_idx // cols, plot_idx % cols])
+    # Trained model (Blue)
+    ax = fig.add_subplot(gs[0, 0])
     ax.set_xlim([-1.2*L, 1.2*L])
     ax.set_ylim([-1.2*L, 1.2*L])
     ax.set_aspect('equal')
     ax.grid(True)
     ax.set_title("Trained Model")
-    line, = ax.plot([], [], 'b-', lw=2)  # Blue for trained model
+    line, = ax.plot([], [], 'b-', lw=2)
     bob, = ax.plot([], [], 'bo', markersize=10)
     axes.append(ax)
     lines.append(line)
     bobs.append(bob)
-    plot_idx += 1
     
-    # Ground truth (if provided)
-    if true_thetas is not None:
-        ax = fig.add_subplot(gs[plot_idx // cols, plot_idx % cols])
-        ax.set_xlim([-1.2*L, 1.2*L])
-        ax.set_ylim([-1.2*L, 1.2*L])
-        ax.set_aspect('equal')
-        ax.grid(True)
-        ax.set_title("Ground Truth")
-        line, = ax.plot([], [], 'k-', lw=2)  # Black for ground truth
-        bob, = ax.plot([], [], 'ko', markersize=10)
-        axes.append(ax)
-        lines.append(line)
-        bobs.append(bob)
-        plot_idx += 1
+    # Ground truth (Black)
+    ax = fig.add_subplot(gs[0, 1])
+    ax.set_xlim([-1.2*L, 1.2*L])
+    ax.set_ylim([-1.2*L, 1.2*L])
+    ax.set_aspect('equal')
+    ax.grid(True)
+    ax.set_title("Ground Truth")
+    line, = ax.plot([], [], 'k-', lw=2)
+    bob, = ax.plot([], [], 'ko', markersize=10)
+    axes.append(ax)
+    lines.append(line)
+    bobs.append(bob)
     
-    # Untrained model (if provided)
-    if untrained_thetas is not None:
-        ax = fig.add_subplot(gs[plot_idx // cols, plot_idx % cols])
-        ax.set_xlim([-1.2*L, 1.2*L])
-        ax.set_ylim([-1.2*L, 1.2*L])
-        ax.set_aspect('equal')
-        ax.grid(True)
-        ax.set_title("Untrained Model")
-        line, = ax.plot([], [], 'g-', lw=2)  # Green for untrained
-        bob, = ax.plot([], [], 'go', markersize=10)
-        axes.append(ax)
-        lines.append(line)
-        bobs.append(bob)
-        plot_idx += 1
+    # Untrained model (Green)
+    ax = fig.add_subplot(gs[0, 2])
+    ax.set_xlim([-1.2*L, 1.2*L])
+    ax.set_ylim([-1.2*L, 1.2*L])
+    ax.set_aspect('equal')
+    ax.grid(True)
+    ax.set_title("Untrained Model")
+    line, = ax.plot([], [], 'g-', lw=2)
+    bob, = ax.plot([], [], 'go', markersize=10)
+    axes.append(ax)
+    lines.append(line)
+    bobs.append(bob)
     
-    # Random model (if provided)
-    if random_thetas is not None:
-        ax = fig.add_subplot(gs[plot_idx // cols, plot_idx % cols])
-        ax.set_xlim([-1.2*L, 1.2*L])
-        ax.set_ylim([-1.2*L, 1.2*L])
-        ax.set_aspect('equal')
-        ax.grid(True)
-        ax.set_title("Random Prediction")
-        line, = ax.plot([], [], 'r-', lw=2)  # Red for random
-        bob, = ax.plot([], [], 'ro', markersize=10)
-        axes.append(ax)
-        lines.append(line)
-        bobs.append(bob)
+    # Random predictions (Red)
+    ax = fig.add_subplot(gs[0, 3])
+    ax.set_xlim([-1.2*L, 1.2*L])
+    ax.set_ylim([-1.2*L, 1.2*L])
+    ax.set_aspect('equal')
+    ax.grid(True)
+    ax.set_title("Random Prediction")
+    line, = ax.plot([], [], 'r-', lw=2)
+    bob, = ax.plot([], [], 'ro', markersize=10)
+    axes.append(ax)
+    lines.append(line)
+    bobs.append(bob)
     
     # Add a time display at the top
     time_text = fig.text(0.5, 0.95, '', ha='center')
     fig.suptitle(title, fontsize=16)
+    plt.tight_layout(rect=[0, 0, 1, 0.95])
     
     def init():
         """Initialize animation."""
@@ -189,7 +170,7 @@ def animate_pendulum(times, thetas, L=1.0, title="Pendulum Animation", fps=30, s
         """Update animation for frame i."""
         updates = []
         
-        # Update trained model
+        # Update trained model (always present)
         theta = thetas[i]
         x = L * np.sin(theta)
         y = -L * np.cos(theta)
@@ -198,34 +179,40 @@ def animate_pendulum(times, thetas, L=1.0, title="Pendulum Animation", fps=30, s
         updates.extend([lines[0], bobs[0]])
         
         # Update ground truth if provided
-        model_idx = 1
         if true_thetas is not None:
             theta = true_thetas[i]
             x = L * np.sin(theta)
             y = -L * np.cos(theta)
-            lines[model_idx].set_data([0, x], [0, y])
-            bobs[model_idx].set_data([x], [y])
-            updates.extend([lines[model_idx], bobs[model_idx]])
-            model_idx += 1
+            lines[1].set_data([0, x], [0, y])
+            bobs[1].set_data([x], [y])
+        else:
+            lines[1].set_data([], [])
+            bobs[1].set_data([], [])
+        updates.extend([lines[1], bobs[1]])
         
         # Update untrained model if provided
         if untrained_thetas is not None:
             theta = untrained_thetas[i]
             x = L * np.sin(theta)
             y = -L * np.cos(theta)
-            lines[model_idx].set_data([0, x], [0, y])
-            bobs[model_idx].set_data([x], [y])
-            updates.extend([lines[model_idx], bobs[model_idx]])
-            model_idx += 1
+            lines[2].set_data([0, x], [0, y])
+            bobs[2].set_data([x], [y])
+        else:
+            lines[2].set_data([], [])
+            bobs[2].set_data([], [])
+        updates.extend([lines[2], bobs[2]])
         
         # Update random model if provided
         if random_thetas is not None:
             theta = random_thetas[i]
             x = L * np.sin(theta)
             y = -L * np.cos(theta)
-            lines[model_idx].set_data([0, x], [0, y])
-            bobs[model_idx].set_data([x], [y])
-            updates.extend([lines[model_idx], bobs[model_idx]])
+            lines[3].set_data([0, x], [0, y])
+            bobs[3].set_data([x], [y])
+        else:
+            lines[3].set_data([], [])
+            bobs[3].set_data([], [])
+        updates.extend([lines[3], bobs[3]])
         
         time_text.set_text(f'Time: {times[i]:.2f}s')
         updates.append(time_text)
@@ -237,7 +224,8 @@ def animate_pendulum(times, thetas, L=1.0, title="Pendulum Animation", fps=30, s
                           init_func=init, blit=True, interval=1000/fps)
     
     if save_path:
-        anim.save(save_path, writer='pillow', fps=fps)
+        # Save with higher DPI for better quality
+        anim.save(save_path, writer='pillow', fps=fps, dpi=100)
         print(f"Animation saved to {save_path}")
     else:
         plt.show()
@@ -371,19 +359,6 @@ def animate_wave_field(wave_fields, grid_size=None, title="Wave Propagation",
         num_frames = random_wave_fields.shape[0]
         random_wave_fields = random_wave_fields.reshape(num_frames, grid_size, grid_size)
     
-    # Count how many models we need to display
-    model_count = 1  # Trained model
-    if true_wave_fields is not None:
-        model_count += 1
-    if untrained_wave_fields is not None:
-        model_count += 1
-    if random_wave_fields is not None:
-        model_count += 1
-    
-    # Determine number of columns and rows
-    cols = min(model_count, 2)  # Maximum 2 columns
-    rows = (model_count + cols - 1) // cols
-    
     # Get min and max values for consistent colormap across all models
     vmin = wave_fields.min()
     vmax = wave_fields.max()
@@ -400,52 +375,70 @@ def animate_wave_field(wave_fields, grid_size=None, title="Wave Propagation",
         vmin = min(vmin, random_wave_fields.min())
         vmax = max(vmax, random_wave_fields.max())
     
-    # Create figure and axes
-    fig = plt.figure(figsize=(cols * 6, rows * 5))
+    # Create a 2x2 grid layout for the four models
+    fig = plt.figure(figsize=(12, 10))
     fig.suptitle(title, fontsize=16)
+    
+    # Create 2x2 grid for the four models
+    gs = GridSpec(2, 2, figure=fig)
     
     # Create subplots
     axes = []
     images = []
     
-    # Trained model
-    ax = fig.add_subplot(rows, cols, 1)
+    # Trained model (upper left)
+    ax = fig.add_subplot(gs[0, 0])
     ax.set_title("Trained Model")
     im = ax.imshow(wave_fields[0], cmap=cmap, origin='lower', 
-                  interpolation='bilinear', vmin=vmin, vmax=vmax)
+                   interpolation='bilinear', vmin=vmin, vmax=vmax)
     plt.colorbar(im, ax=ax, label='Amplitude')
     axes.append(ax)
     images.append(im)
     
-    # Ground truth
+    # Ground truth (upper right)
+    ax = fig.add_subplot(gs[0, 1])
+    ax.set_title("Ground Truth")
     if true_wave_fields is not None:
-        ax = fig.add_subplot(rows, cols, 2)
-        ax.set_title("Ground Truth")
         im = ax.imshow(true_wave_fields[0], cmap=cmap, origin='lower', 
-                      interpolation='bilinear', vmin=vmin, vmax=vmax)
-        plt.colorbar(im, ax=ax, label='Amplitude')
-        axes.append(ax)
-        images.append(im)
+                       interpolation='bilinear', vmin=vmin, vmax=vmax)
+    else:
+        im = ax.imshow(np.zeros_like(wave_fields[0]), cmap=cmap, origin='lower', 
+                       interpolation='bilinear', vmin=vmin, vmax=vmax)
+        ax.text(0.5, 0.5, 'Not Available', horizontalalignment='center',
+                verticalalignment='center', transform=ax.transAxes)
+    plt.colorbar(im, ax=ax, label='Amplitude')
+    axes.append(ax)
+    images.append(im)
     
-    # Untrained model
+    # Untrained model (lower left)
+    ax = fig.add_subplot(gs[1, 0])
+    ax.set_title("Untrained Model")
     if untrained_wave_fields is not None:
-        ax = fig.add_subplot(rows, cols, 3)
-        ax.set_title("Untrained Model")
         im = ax.imshow(untrained_wave_fields[0], cmap=cmap, origin='lower', 
-                      interpolation='bilinear', vmin=vmin, vmax=vmax)
-        plt.colorbar(im, ax=ax, label='Amplitude')
-        axes.append(ax)
-        images.append(im)
+                       interpolation='bilinear', vmin=vmin, vmax=vmax)
+    else:
+        im = ax.imshow(np.zeros_like(wave_fields[0]), cmap=cmap, origin='lower', 
+                       interpolation='bilinear', vmin=vmin, vmax=vmax)
+        ax.text(0.5, 0.5, 'Not Available', horizontalalignment='center',
+                verticalalignment='center', transform=ax.transAxes)
+    plt.colorbar(im, ax=ax, label='Amplitude')
+    axes.append(ax)
+    images.append(im)
     
-    # Random predictions
+    # Random predictions (lower right)
+    ax = fig.add_subplot(gs[1, 1])
+    ax.set_title("Random Prediction")
     if random_wave_fields is not None:
-        ax = fig.add_subplot(rows, cols, 4)
-        ax.set_title("Random Prediction")
         im = ax.imshow(random_wave_fields[0], cmap=cmap, origin='lower', 
-                      interpolation='bilinear', vmin=vmin, vmax=vmax)
-        plt.colorbar(im, ax=ax, label='Amplitude')
-        axes.append(ax)
-        images.append(im)
+                       interpolation='bilinear', vmin=vmin, vmax=vmax)
+    else:
+        im = ax.imshow(np.zeros_like(wave_fields[0]), cmap=cmap, origin='lower', 
+                       interpolation='bilinear', vmin=vmin, vmax=vmax)
+        ax.text(0.5, 0.5, 'Not Available', horizontalalignment='center',
+                verticalalignment='center', transform=ax.transAxes)
+    plt.colorbar(im, ax=ax, label='Amplitude')
+    axes.append(ax)
+    images.append(im)
     
     # Add time display
     time_text = fig.text(0.5, 0.01, '', ha='center')
@@ -462,22 +455,19 @@ def animate_wave_field(wave_fields, grid_size=None, title="Wave Propagation",
         updates.append(images[0])
         
         # Update ground truth if provided
-        model_idx = 1
         if true_wave_fields is not None:
-            images[model_idx].set_array(true_wave_fields[i])
-            updates.append(images[model_idx])
-            model_idx += 1
+            images[1].set_array(true_wave_fields[i])
+        updates.append(images[1])
         
         # Update untrained model if provided
         if untrained_wave_fields is not None:
-            images[model_idx].set_array(untrained_wave_fields[i])
-            updates.append(images[model_idx])
-            model_idx += 1
+            images[2].set_array(untrained_wave_fields[i])
+        updates.append(images[2])
         
         # Update random model if provided
         if random_wave_fields is not None:
-            images[model_idx].set_array(random_wave_fields[i])
-            updates.append(images[model_idx])
+            images[3].set_array(random_wave_fields[i])
+        updates.append(images[3])
         
         time_text.set_text(f'Frame: {i}')
         updates.append(time_text)
@@ -489,7 +479,8 @@ def animate_wave_field(wave_fields, grid_size=None, title="Wave Propagation",
                           blit=True, interval=1000/fps)
     
     if save_path:
-        anim.save(save_path, writer='pillow', fps=fps)
+        # Save with higher DPI for better quality
+        anim.save(save_path, writer='pillow', fps=fps, dpi=100)
         print(f"Animation saved to {save_path}")
     else:
         plt.show()
