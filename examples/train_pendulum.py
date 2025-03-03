@@ -14,7 +14,12 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from data.loaders.base import PendulumDataset
 from models.pinn import PendulumPINN
 from training.trainer import PhysicsTrainer
-from utils.visualization import plot_pendulum_trajectory, animate_pendulum, create_comparison_directory
+from utils.visualization import (
+    plot_pendulum_trajectory, 
+    animate_pendulum, 
+    create_comparison_directory,
+    generate_random_predictions
+)
 from utils.evaluation import compute_pendulum_errors
 
 
@@ -43,12 +48,12 @@ def parse_args():
                         help='Learning rate for optimizer')
     parser.add_argument('--physics_weight', type=float, default=0.5,
                         help='Weight for physics-informed loss (between 0 and 1)')
+    
     parser.add_argument('--samples', type=int, default=1000,
                         help='Number of samples to generate if creating data')
-    
     parser.add_argument('--val_split', type=float, default=0.2,
                         help='Fraction of data to use for validation')
-    parser.add_argument('--no_cuda', action='store_true',
+    parser.add_argument('--no_cuda', action='store_true', default=False,
                         help='Disable CUDA training')
     parser.add_argument('--save_freq', type=int, default=10,
                         help='Frequency of saving checkpoints (epochs)')
@@ -59,21 +64,21 @@ def parse_args():
 
 
 def generate_ground_truth_trajectory(initial_theta, initial_omega, g=9.81, L=1.0, num_steps=200, dt=0.05):
-    """Generate ground truth pendulum trajectory using exact physics.
+    """Generate ground truth pendulum trajectory using physical equations.
     
     Args:
         initial_theta (float): Initial angle in radians.
-        initial_omega (float): Initial angular velocity in radians/s.
-        g (float): Gravitational acceleration in m/s^2.
-        L (float): Pendulum length in meters.
+        initial_omega (float): Initial angular velocity in radians/second.
+        g (float): Gravitational acceleration (m/s^2).
+        L (float): Pendulum length (m).
         num_steps (int): Number of time steps to generate.
         dt (float): Time step size in seconds.
         
     Returns:
-        tuple: (times, thetas, omegas) with the ground truth trajectory.
+        tuple: (times, thetas, omegas) arrays containing the trajectory.
     """
     # Initialize arrays
-    times = np.zeros(num_steps)
+    times = np.linspace(0, dt * num_steps, num_steps)
     thetas = np.zeros(num_steps)
     omegas = np.zeros(num_steps)
     
@@ -81,90 +86,70 @@ def generate_ground_truth_trajectory(initial_theta, initial_omega, g=9.81, L=1.0
     thetas[0] = initial_theta
     omegas[0] = initial_omega
     
-    # Solve using Euler integration (simple but sufficient for demonstration)
+    # Euler integration of the pendulum equations
     for i in range(1, num_steps):
-        times[i] = i * dt
+        # Compute acceleration (second derivative of theta)
+        alpha = -g / L * np.sin(thetas[i-1])
         
-        # Update angular velocity using physics equation: dω/dt = -(g/L)sin(θ)
-        omegas[i] = omegas[i-1] - (g/L) * np.sin(thetas[i-1]) * dt
+        # Update velocity (first derivative of theta)
+        omegas[i] = omegas[i-1] + alpha * dt
         
-        # Update angle using updated angular velocity: dθ/dt = ω
+        # Update position (theta)
         thetas[i] = thetas[i-1] + omegas[i] * dt
     
     return times, thetas, omegas
 
 
 def main():
-    """Train a pendulum physics-informed neural network."""
-    # Parse command line arguments
+    """Main function."""
     args = parse_args()
     
-    # Setup device
-    use_cuda = not args.no_cuda and torch.cuda.is_available()
-    device = torch.device("cuda" if use_cuda else "cpu")
-    
-    # Create directories if they don't exist
+    # Create directories
+    os.makedirs(os.path.dirname(args.save_data_path), exist_ok=True)
     os.makedirs(args.checkpoint_dir, exist_ok=True)
     os.makedirs(args.log_dir, exist_ok=True)
-    os.makedirs(os.path.dirname(args.save_data_path), exist_ok=True)
     
-    # Create comparison directory
-    comp_dir = create_comparison_directory(args.checkpoint_dir)
+    # Create a comparison directory for visualizations
+    comp_dir = create_comparison_directory("results/pendulum")
+    
+    # Set device
+    device = torch.device('cuda' if torch.cuda.is_available() and not args.no_cuda else 'cpu')
+    print(f"Using device: {device}")
     
     # Load or generate dataset
-    if args.data_path and os.path.exists(args.data_path):
+    if args.data_path:
         print(f"Loading dataset from {args.data_path}")
         dataset = PendulumDataset(data_path=args.data_path)
     else:
         print(f"Generating pendulum dataset with {args.samples} samples")
         dataset = PendulumDataset(generate=True, samples=args.samples)
-        
-        # Save the generated dataset
         dataset.save_dataset(args.save_data_path)
     
-    # Split dataset into training and validation sets
+    # Split dataset into train and validation sets
     val_size = int(len(dataset) * args.val_split)
     train_size = len(dataset) - val_size
-    
     train_dataset, val_dataset = random_split(dataset, [train_size, val_size])
     
-    print(f"Training set size: {len(train_dataset)}")
-    print(f"Validation set size: {len(val_dataset)}")
+    train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True)
+    val_loader = DataLoader(val_dataset, batch_size=args.batch_size)
     
-    # Create data loaders
-    train_loader = DataLoader(
-        train_dataset,
-        batch_size=args.batch_size,
-        shuffle=True,
-        num_workers=4,
-        pin_memory=use_cuda
-    )
+    print(f"Train set size: {len(train_dataset)}, Val set size: {len(val_dataset)}")
     
-    val_loader = DataLoader(
-        val_dataset,
-        batch_size=args.batch_size,
-        shuffle=False,
-        num_workers=4,
-        pin_memory=use_cuda
-    )
+    # Initialize model
+    model = PendulumPINN(hidden_dim=args.hidden_dim, num_layers=args.num_layers)
     
-    # Create model
-    model = PendulumPINN(
-        hidden_dim=args.hidden_dim,
-        num_layers=args.num_layers
-    )
+    # Create an untrained model (same architecture but different random initialization)
+    untrained_model = PendulumPINN(hidden_dim=args.hidden_dim, num_layers=args.num_layers)
     
-    # Create optimizer and scheduler
+    # Move models to device
+    model.to(device)
+    untrained_model.to(device)
+    
+    # Initialize optimizer
     optimizer = torch.optim.Adam(model.parameters(), lr=args.learning_rate)
-    scheduler = ReduceLROnPlateau(
-        optimizer,
-        mode='min',
-        factor=0.5,
-        patience=5,
-        verbose=True
-    )
+    scheduler = ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=5, verbose=True)
     
-    # Create trainer
+    # Initialize trainer
     trainer = PhysicsTrainer(
         model=model,
         data_loader=train_loader,
@@ -176,87 +161,85 @@ def main():
         log_dir=args.log_dir
     )
     
-    # Train the model
+    # Train model
     print("Starting training...")
-    history = trainer.train(
+    trainer.train(
         num_epochs=args.num_epochs,
         save_dir=args.checkpoint_dir,
         save_freq=args.save_freq
     )
+    print("Training completed.")
     
-    # Plot loss history
-    trainer.plot_history(
-        history,
-        save_path=os.path.join(args.checkpoint_dir, 'loss_history.png')
-    )
+    # Generate comparisons for a few test trajectories
+    print(f"Generating comparisons for {args.num_test_trajectories} test trajectories...")
     
-    # Generate test trajectories for comparisons
-    print(f"\nGenerating {args.num_test_trajectories} test trajectories for comparison...")
-    
-    # Test with different initial conditions
-    test_conditions = [
-        (0.5, 0.0),    # Moderate angle, no initial velocity
-        (1.2, 0.0),    # Large angle, no initial velocity
-        (0.3, 0.8),    # Small angle with initial velocity
-        (-0.7, -0.5),  # Negative angle with negative velocity
-        (1.5, -1.0)    # Large angle with negative velocity
-    ]
-    
-    # Use only the number of test trajectories specified
-    test_conditions = test_conditions[:min(args.num_test_trajectories, len(test_conditions))]
-    
-    for i, (initial_theta, initial_omega) in enumerate(test_conditions):
-        print(f"\nTest trajectory {i+1}:")
-        print(f"Initial angle: {initial_theta:.2f} radians")
-        print(f"Initial angular velocity: {initial_omega:.2f} radians/s")
+    for i in range(args.num_test_trajectories):
+        # Generate random initial conditions for test trajectory
+        initial_theta = np.random.uniform(-np.pi/3, np.pi/3)
+        initial_omega = np.random.uniform(-1.0, 1.0)
         
         # Generate ground truth trajectory
-        true_times, true_thetas, true_omegas = generate_ground_truth_trajectory(
-            initial_theta=initial_theta,
-            initial_omega=initial_omega,
-            num_steps=200,
-            dt=0.05
+        times, true_thetas, true_omegas = generate_ground_truth_trajectory(
+            initial_theta, initial_omega, num_steps=200, dt=0.05
         )
         
-        # Generate model prediction
-        pred_times, pred_thetas, pred_omegas = model.predict_trajectory(
-            initial_theta=initial_theta,
-            initial_omega=initial_omega,
-            num_steps=200,
-            dt=0.05
+        # Get predictions from trained model
+        pred_trajectory = model.predict_trajectory(
+            initial_theta, initial_omega, num_steps=len(times), dt=times[1]-times[0]
+        )
+        pred_thetas = pred_trajectory[:, 0].detach().cpu().numpy()
+        pred_omegas = pred_trajectory[:, 1].detach().cpu().numpy()
+        
+        # Get predictions from untrained model
+        untrained_trajectory = untrained_model.predict_trajectory(
+            initial_theta, initial_omega, num_steps=len(times), dt=times[1]-times[0]
+        )
+        untrained_thetas = untrained_trajectory[:, 0].detach().cpu().numpy()
+        untrained_omegas = untrained_trajectory[:, 1].detach().cpu().numpy()
+        
+        # Generate random predictions
+        random_thetas = generate_random_predictions(
+            initial_theta, len(times), range_min=-np.pi, range_max=np.pi
+        )
+        random_omegas = generate_random_predictions(
+            initial_omega, len(times), range_min=-3.0, range_max=3.0
         )
         
-        # Compute physical errors for prediction
-        errors = compute_pendulum_errors(pred_times, pred_thetas, pred_omegas)
+        # Compute physical errors
+        true_errors = compute_pendulum_errors(times, true_thetas, true_omegas)
+        pred_errors = compute_pendulum_errors(times, pred_thetas, pred_omegas)
+        untrained_errors = compute_pendulum_errors(times, untrained_thetas, untrained_omegas)
+        random_errors = compute_pendulum_errors(times, random_thetas, random_omegas)
         
-        print("\nPhysical error metrics:")
-        for key, value in errors.items():
-            print(f"{key}: {value:.6f}")
+        print(f"\nTest trajectory {i+1}:")
+        print(f"  Initial conditions: theta={initial_theta:.4f}, omega={initial_omega:.4f}")
+        print(f"  Mean physical error (ground truth): {np.mean(true_errors):.6f}")
+        print(f"  Mean physical error (trained model): {np.mean(pred_errors):.6f}")
+        print(f"  Mean physical error (untrained model): {np.mean(untrained_errors):.6f}")
+        print(f"  Mean physical error (random prediction): {np.mean(random_errors):.6f}")
         
-        # Plot comparison trajectory
+        # Plot trajectory comparison
         plot_pendulum_trajectory(
-            times=pred_times, 
-            thetas=pred_thetas, 
-            omegas=pred_omegas,
-            true_times=true_times,
-            true_thetas=true_thetas,
-            true_omegas=true_omegas,
+            times, pred_thetas, pred_omegas,
+            true_times=times, true_thetas=true_thetas, true_omegas=true_omegas,
+            untrained_thetas=untrained_thetas, untrained_omegas=untrained_omegas,
+            random_thetas=random_thetas, random_omegas=random_omegas,
             title=f"Pendulum Trajectory {i+1}",
-            save_path=os.path.join(comp_dir, f'pendulum_trajectory_comparison_{i+1}.png')
+            save_path=os.path.join(comp_dir, f"pendulum_trajectory_comparison_{i+1}.png")
         )
         
-        # Generate comparison animation
+        # Create animation
         animate_pendulum(
-            times=pred_times,
-            thetas=pred_thetas,
+            times, pred_thetas, L=1.0, 
             true_thetas=true_thetas,
+            untrained_thetas=untrained_thetas,
+            random_thetas=random_thetas,
             title=f"Pendulum Motion Comparison {i+1}",
             fps=30,
-            save_path=os.path.join(comp_dir, f'pendulum_animation_comparison_{i+1}.gif')
+            save_path=os.path.join(comp_dir, f"pendulum_animation_comparison_{i+1}.gif")
         )
     
-    print(f"\nTraining complete! Model saved to {args.checkpoint_dir}")
-    print(f"Check the trajectory plots and animations in {comp_dir}")
+    print(f"\nComparisons saved to {comp_dir}")
 
 
 if __name__ == "__main__":

@@ -11,10 +11,14 @@ from torch.optim.lr_scheduler import ReduceLROnPlateau
 import sys
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from data.loaders.base import WaveDataset
+from data.loaders.wave import WaveDataset
 from models.pinn import WavePINN
 from training.trainer import PhysicsTrainer
-from utils.visualization import plot_wave_field, animate_wave_field, create_comparison_directory
+from utils.visualization import (
+    plot_wave_field, 
+    animate_wave_field, 
+    create_comparison_directory
+)
 from utils.evaluation import compute_wave_errors
 
 
@@ -125,6 +129,61 @@ def propagate_wave_ground_truth(initial_wave, grid_size, num_steps, wave_speed=0
         # Update for next iteration
         prev_wave = current_wave.copy()
         current_wave = next_wave.copy()
+    
+    return wave_fields
+
+
+def generate_random_wave_fields(initial_wave, grid_size, num_steps, amplitude_range=(-1.0, 1.0), smooth_factor=0.8):
+    """Generate random wave fields with some spatial and temporal smoothness.
+    
+    Args:
+        initial_wave (array): Initial wave field.
+        grid_size (int): Size of the grid.
+        num_steps (int): Number of time steps to generate.
+        amplitude_range (tuple): Range for wave amplitude values.
+        smooth_factor (float): Smoothness factor between 0 and 1.
+            - 0 means completely random
+            - 1 means constant initial field
+    
+    Returns:
+        array: Random wave fields of shape (num_steps, grid_size, grid_size).
+    """
+    # Reshape if needed
+    if initial_wave.ndim == 1:
+        initial_wave = initial_wave.reshape(grid_size, grid_size)
+    
+    # Initialize the wave fields array
+    wave_fields = np.zeros((num_steps, grid_size, grid_size))
+    wave_fields[0] = initial_wave.copy()
+    
+    # Smoothing kernel for spatial smoothing
+    kernel_size = 3
+    kernel = np.ones((kernel_size, kernel_size)) / (kernel_size * kernel_size)
+    
+    # Generate random fields with smoothness
+    for t in range(1, num_steps):
+        # Start with previous field
+        wave_fields[t] = wave_fields[t-1].copy()
+        
+        # Add random noise
+        random_field = np.random.uniform(
+            amplitude_range[0], amplitude_range[1], 
+            size=(grid_size, grid_size)
+        )
+        
+        # Apply smoothing in space
+        # Simple convolution for smoothness (edges handled by maintaining previous values)
+        for i in range(1, grid_size-1):
+            for j in range(1, grid_size-1):
+                # Extract local patch
+                patch = random_field[i-1:i+2, j-1:j+2]
+                # Apply kernel
+                smoothed_value = np.sum(patch * kernel)
+                # Update with weighted combination of previous and smoothed random
+                wave_fields[t, i, j] = (
+                    smooth_factor * wave_fields[t-1, i, j] + 
+                    (1 - smooth_factor) * smoothed_value
+                )
     
     return wave_fields
 
