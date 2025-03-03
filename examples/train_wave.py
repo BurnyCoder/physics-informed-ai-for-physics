@@ -14,7 +14,7 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from data.loaders.base import WaveDataset
 from models.pinn import WavePINN
 from training.trainer import PhysicsTrainer
-from utils.visualization import plot_wave_field, animate_wave_field
+from utils.visualization import plot_wave_field, animate_wave_field, create_comparison_directory
 from utils.evaluation import compute_wave_errors
 
 
@@ -57,8 +57,76 @@ def parse_args():
                         help='Disable CUDA training')
     parser.add_argument('--save_freq', type=int, default=10,
                         help='Frequency of saving checkpoints (epochs)')
+    parser.add_argument('--num_prediction_steps', type=int, default=20,
+                        help='Number of steps to predict for comparison')
     
     return parser.parse_args()
+
+
+def propagate_wave_ground_truth(initial_wave, grid_size, num_steps, wave_speed=0.2, dt=0.01, dx=0.02):
+    """Propagate wave using ground truth wave equation.
+    
+    Args:
+        initial_wave (ndarray): Initial wave field (2D grid).
+        grid_size (int): Size of the grid (grid_size x grid_size).
+        num_steps (int): Number of time steps to simulate.
+        wave_speed (float): Speed of wave propagation.
+        dt (float): Time step size.
+        dx (float): Spatial grid size.
+        
+    Returns:
+        ndarray: Wave fields over time of shape (num_steps, grid_size, grid_size).
+    """
+    # Make sure the initial wave is a 2D grid
+    if initial_wave.ndim == 1:
+        initial_wave = initial_wave.reshape(grid_size, grid_size)
+    
+    # Need previous and current state to compute next state
+    # For initial step, assume the wave was stationary (previous = current)
+    prev_wave = initial_wave.copy()
+    current_wave = initial_wave.copy()
+    
+    # Initialize array to store all wave fields
+    wave_fields = np.zeros((num_steps, grid_size, grid_size))
+    wave_fields[0] = initial_wave
+    
+    # Square of wave speed times square of time step divided by square of space step
+    c_squared = wave_speed ** 2
+    factor = c_squared * (dt/dx) ** 2
+    
+    # Propagate the wave
+    for t in range(1, num_steps):
+        # Create a copy of the current wave for the next step
+        next_wave = np.zeros_like(current_wave)
+        
+        # Apply wave equation to interior points
+        for i in range(1, grid_size - 1):
+            for j in range(1, grid_size - 1):
+                # Wave equation in discrete form
+                # u_{i,j}^{n+1} = 2*u_{i,j}^n - u_{i,j}^{n-1} + c^2 * (dt/dx)^2 * 
+                # (u_{i+1,j}^n + u_{i-1,j}^n + u_{i,j+1}^n + u_{i,j-1}^n - 4*u_{i,j}^n)
+                laplacian = (
+                    current_wave[i+1, j] + current_wave[i-1, j] +
+                    current_wave[i, j+1] + current_wave[i, j-1] - 
+                    4 * current_wave[i, j]
+                )
+                
+                next_wave[i, j] = (
+                    2 * current_wave[i, j] - prev_wave[i, j] + 
+                    factor * laplacian
+                )
+        
+        # Apply boundary conditions (fixed boundaries)
+        next_wave[0, :] = next_wave[-1, :] = next_wave[:, 0] = next_wave[:, -1] = 0
+        
+        # Store the wave field
+        wave_fields[t] = next_wave
+        
+        # Update for next iteration
+        prev_wave = current_wave.copy()
+        current_wave = next_wave.copy()
+    
+    return wave_fields
 
 
 def main():
@@ -74,6 +142,9 @@ def main():
     os.makedirs(args.checkpoint_dir, exist_ok=True)
     os.makedirs(args.log_dir, exist_ok=True)
     os.makedirs(os.path.dirname(args.save_data_path), exist_ok=True)
+    
+    # Create comparison directory
+    comp_dir = create_comparison_directory(args.checkpoint_dir)
     
     # Load or generate dataset
     if args.data_path and os.path.exists(args.data_path):
@@ -158,58 +229,81 @@ def main():
         save_path=os.path.join(args.checkpoint_dir, 'loss_history.png')
     )
     
-    # Generate wave propagation prediction
-    print("\nGenerating wave propagation prediction...")
+    # Generate wave propagation comparison
+    print("\nGenerating wave propagation comparison...")
     
-    # Get a sample from the validation set
-    inputs, _ = next(iter(val_loader))
-    sample_input = inputs[0].to(device)  # Take the first sample
+    # Get 3 different samples from the validation set for testing
+    num_test_samples = min(3, len(val_dataset))
+    test_indices = np.random.choice(len(val_dataset), num_test_samples, replace=False)
     
-    # Predict the next 10 time steps
-    model.eval()
-    wave_fields = [sample_input.cpu().numpy()]
-    
-    current_wave = sample_input
-    with torch.no_grad():
-        for _ in range(10):
-            next_wave = model(current_wave.unsqueeze(0)).squeeze(0)
-            wave_fields.append(next_wave.cpu().numpy())
-            current_wave = next_wave
-    
-    wave_fields = np.array(wave_fields)
-    
-    # Compute wave equation errors
-    errors = compute_wave_errors(
-        wave_fields,
-        dt=model.dt,
-        dx=model.dx,
-        c=args.wave_speed
-    )
-    
-    print("\nPhysical error metrics:")
-    for key, value in errors.items():
-        print(f"{key}: {value:.6f}")
-    
-    # Plot wave fields
-    for i, wave_field in enumerate(wave_fields):
-        plot_wave_field(
-            wave_field,
+    for i, idx in enumerate(test_indices):
+        # Get a test sample
+        inputs, _ = val_dataset[idx]
+        sample_input = inputs.to(device)
+        
+        # Generate ground truth propagation
+        print(f"\nGenerating ground truth and predictions for test sample {i+1}...")
+        
+        # Convert input tensor to numpy array for ground truth simulation
+        initial_wave = sample_input.cpu().numpy()
+        
+        # Generate ground truth wave propagation
+        true_wave_fields = propagate_wave_ground_truth(
+            initial_wave=initial_wave,
             grid_size=args.grid_size,
-            title=f"Wave Field (Time Step {i})",
-            save_path=os.path.join(args.checkpoint_dir, f'wave_field_{i}.png')
+            num_steps=args.num_prediction_steps,
+            wave_speed=args.wave_speed
+        )
+        
+        # Predict the next steps using the model
+        model.eval()
+        pred_wave_fields = [initial_wave]
+        
+        current_wave = sample_input
+        with torch.no_grad():
+            for _ in range(1, args.num_prediction_steps):
+                next_wave = model(current_wave.unsqueeze(0)).squeeze(0)
+                pred_wave_fields.append(next_wave.cpu().numpy())
+                current_wave = next_wave
+        
+        pred_wave_fields = np.array(pred_wave_fields)
+        
+        # Compute wave equation errors
+        errors = compute_wave_errors(
+            pred_wave_fields,
+            dt=model.dt,
+            dx=model.dx,
+            c=args.wave_speed
+        )
+        
+        print(f"\nPhysical error metrics for test sample {i+1}:")
+        for key, value in errors.items():
+            print(f"{key}: {value:.6f}")
+        
+        # Plot wave fields at specific time steps
+        plot_steps = [0, min(5, args.num_prediction_steps-1), args.num_prediction_steps-1]
+        
+        for step in plot_steps:
+            plot_wave_field(
+                wave_field=pred_wave_fields[step],
+                grid_size=args.grid_size,
+                title=f"Wave Field (Step {step})",
+                true_wave_field=true_wave_fields[step],
+                save_path=os.path.join(comp_dir, f'wave_field_comparison_{i+1}_step_{step}.png')
+            )
+        
+        # Create animation
+        animate_wave_field(
+            wave_fields=pred_wave_fields,
+            grid_size=args.grid_size,
+            title=f"Wave Propagation Comparison {i+1}",
+            fps=4,
+            true_wave_fields=true_wave_fields,
+            save_path=os.path.join(comp_dir, f'wave_animation_comparison_{i+1}.gif')
         )
     
-    # Create animation
-    animate_wave_field(
-        wave_fields,
-        grid_size=args.grid_size,
-        title="Wave Propagation",
-        fps=4,
-        save_path=os.path.join(args.checkpoint_dir, 'wave_animation.gif')
-    )
-    
     print(f"\nTraining complete! Model saved to {args.checkpoint_dir}")
-    print(f"Check the wave field plots and animation in {args.checkpoint_dir}")
+    print(f"Check the wave field plots and animations in {comp_dir}")
 
 
 if __name__ == "__main__":
