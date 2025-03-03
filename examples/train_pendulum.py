@@ -147,7 +147,7 @@ def main():
     
     # Initialize optimizer
     optimizer = torch.optim.Adam(model.parameters(), lr=args.learning_rate)
-    scheduler = ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=5, verbose=True)
+    scheduler = ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=5)
     
     # Initialize trainer
     trainer = PhysicsTrainer(

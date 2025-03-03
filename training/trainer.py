@@ -2,6 +2,7 @@
 
 import os
 import time
+import json
 import numpy as np
 import torch
 from torch.utils.data import DataLoader
@@ -62,6 +63,19 @@ class PhysicsTrainer:
         
         # Initialize best validation loss for model saving
         self.best_val_loss = float('inf')
+        
+        # Store loss history
+        self.train_loss_history = []
+        self.val_loss_history = []
+        self.data_loss_history = []
+        self.physics_loss_history = []
+        self.lr_history = []
+        
+        # Current learning rate
+        self.current_lr = None
+        if optimizer:
+            self.current_lr = optimizer.param_groups[0]['lr']
+            self.lr_history.append(self.current_lr)
     
     def train_epoch(self, epoch):
         """Train the model for one epoch.
@@ -125,6 +139,11 @@ class PhysicsTrainer:
         self.writer.add_scalar('Loss/train_data', avg_data_loss, epoch)
         self.writer.add_scalar('Loss/train_physics', avg_physics_loss, epoch)
         
+        # Store in history
+        self.train_loss_history.append(avg_loss)
+        self.data_loss_history.append(avg_data_loss)
+        self.physics_loss_history.append(avg_physics_loss)
+        
         return {
             'loss': avg_loss,
             'data_loss': avg_data_loss,
@@ -182,6 +201,13 @@ class PhysicsTrainer:
         self.writer.add_scalar('Loss/val_data', avg_data_loss, epoch)
         self.writer.add_scalar('Loss/val_physics', avg_physics_loss, epoch)
         
+        # Store best validation loss
+        if avg_loss < self.best_val_loss:
+            self.best_val_loss = avg_loss
+        
+        # Store in history
+        self.val_loss_history.append(avg_loss)
+        
         return {
             'loss': avg_loss,
             'data_loss': avg_data_loss,
@@ -202,16 +228,6 @@ class PhysicsTrainer:
         # Create save directory if it doesn't exist
         os.makedirs(save_dir, exist_ok=True)
         
-        # Initialize history dictionary
-        history = {
-            'train_loss': [],
-            'train_data_loss': [],
-            'train_physics_loss': [],
-            'val_loss': [],
-            'val_data_loss': [],
-            'val_physics_loss': []
-        }
-        
         # Start timer
         start_time = time.time()
         
@@ -224,47 +240,36 @@ class PhysicsTrainer:
             val_metrics = self.validate(epoch)
             
             # Update history
-            history['train_loss'].append(train_metrics['loss'])
-            history['train_data_loss'].append(train_metrics['data_loss'])
-            history['train_physics_loss'].append(train_metrics['physics_loss'])
+            self.train_loss_history.append(train_metrics['loss'])
+            self.data_loss_history.append(train_metrics['data_loss'])
+            self.physics_loss_history.append(train_metrics['physics_loss'])
             
             if val_metrics:
-                history['val_loss'].append(val_metrics['loss'])
-                history['val_data_loss'].append(val_metrics['data_loss'])
-                history['val_physics_loss'].append(val_metrics['physics_loss'])
+                self.val_loss_history.append(val_metrics['loss'])
+                self.data_loss_history.append(val_metrics['data_loss'])
+                self.physics_loss_history.append(val_metrics['physics_loss'])
                 
                 # Update learning rate based on validation loss
                 if self.scheduler:
                     self.scheduler.step(val_metrics['loss'])
                 
-                # Save model if it's the best so far
-                if val_metrics['loss'] < self.best_val_loss:
-                    self.best_val_loss = val_metrics['loss']
-                    torch.save(
-                        {
-                            'epoch': epoch,
-                            'model_state_dict': self.model.state_dict(),
-                            'optimizer_state_dict': self.optimizer.state_dict(),
-                            'val_loss': val_metrics['loss']
-                        },
-                        os.path.join(save_dir, 'best_model.pt')
-                    )
-                    print(f"Saved best model at epoch {epoch}")
+                # Check if learning rate changed
+                new_lr = self.optimizer.param_groups[0]['lr']
+                if new_lr != self.current_lr:
+                    print(f"Learning rate changed from {self.current_lr} to {new_lr}")
+                    self.current_lr = new_lr
+                
+                self.lr_history.append(self.current_lr)
+                self.writer.add_scalar('Learning_rate', self.current_lr, epoch)
             
             # Save checkpoint periodically
-            if epoch % save_freq == 0:
-                torch.save(
-                    {
-                        'epoch': epoch,
-                        'model_state_dict': self.model.state_dict(),
-                        'optimizer_state_dict': self.optimizer.state_dict(),
-                        'history': history
-                    },
-                    os.path.join(save_dir, f'checkpoint_epoch_{epoch}.pt')
-                )
+            if epoch % save_freq == 0 or epoch == num_epochs:
+                checkpoint_path = os.path.join(save_dir, f'model_epoch_{epoch}.pt')
+                self.save_checkpoint(checkpoint_path, epoch, val_metrics['loss'] if val_metrics else train_metrics['loss'])
             
             # Print metrics
-            print(f"Epoch {epoch}/{num_epochs} completed in {time.time() - start_time:.2f}s")
+            elapsed = time.time() - start_time
+            print(f"Epoch {epoch}/{num_epochs} completed in {elapsed:.2f}s")
             print(f"Train Loss: {train_metrics['loss']:.6f} | "
                   f"Data: {train_metrics['data_loss']:.6f} | "
                   f"Physics: {train_metrics['physics_loss']:.6f}")
@@ -278,6 +283,24 @@ class PhysicsTrainer:
             
             # Reset timer for next epoch
             start_time = time.time()
+        
+        # Save final model
+        final_path = os.path.join(save_dir, 'model_final.pt')
+        self.save_checkpoint(final_path, num_epochs, self.best_val_loss)
+        
+        # Compile training history
+        history = {
+            'train_loss': self.train_loss_history,
+            'val_loss': self.val_loss_history,
+            'data_loss': self.data_loss_history,
+            'physics_loss': self.physics_loss_history,
+            'learning_rate': self.lr_history,
+        }
+        
+        # Save training history
+        history_path = os.path.join(save_dir, 'training_history.json')
+        with open(history_path, 'w') as f:
+            json.dump(history, f)
         
         self.writer.close()
         return history
@@ -308,7 +331,7 @@ class PhysicsTrainer:
         
         # Plot data loss
         plt.subplot(2, 2, 2)
-        plt.plot(history['train_data_loss'], label='Train')
+        plt.plot(history['data_loss'], label='Train')
         if 'val_data_loss' in history and history['val_data_loss']:
             plt.plot(history['val_data_loss'], label='Validation')
         plt.title('Data Loss')
@@ -319,7 +342,7 @@ class PhysicsTrainer:
         
         # Plot physics loss
         plt.subplot(2, 2, 3)
-        plt.plot(history['train_physics_loss'], label='Train')
+        plt.plot(history['physics_loss'], label='Train')
         if 'val_physics_loss' in history and history['val_physics_loss']:
             plt.plot(history['val_physics_loss'], label='Validation')
         plt.title('Physics Loss')
@@ -336,6 +359,28 @@ class PhysicsTrainer:
         else:
             plt.show()
     
+    def save_checkpoint(self, path, epoch, loss):
+        """Save a model checkpoint.
+        
+        Args:
+            path (str): Path to save the checkpoint.
+            epoch (int): Current epoch number.
+            loss (float): Current loss value.
+        """
+        checkpoint = {
+            'epoch': epoch,
+            'model_state_dict': self.model.state_dict(),
+            'optimizer_state_dict': self.optimizer.state_dict(),
+            'loss': loss,
+            'best_val_loss': self.best_val_loss,
+        }
+        
+        if self.scheduler:
+            checkpoint['scheduler_state_dict'] = self.scheduler.state_dict()
+        
+        torch.save(checkpoint, path)
+        print(f"Checkpoint saved to {path}")
+    
     def load_model(self, checkpoint_path):
         """Load model from checkpoint.
         
@@ -348,6 +393,11 @@ class PhysicsTrainer:
         checkpoint = torch.load(checkpoint_path, map_location=self.device)
         self.model.load_state_dict(checkpoint['model_state_dict'])
         self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+        
+        if self.scheduler and 'scheduler_state_dict' in checkpoint:
+            self.scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
+        
+        self.best_val_loss = checkpoint['best_val_loss']
         
         print(f"Model loaded from {checkpoint_path} (epoch {checkpoint.get('epoch', 'unknown')})")
         
