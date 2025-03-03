@@ -11,7 +11,7 @@ from torch.optim.lr_scheduler import ReduceLROnPlateau
 import sys
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from data.loaders.wave import WaveDataset
+from data.loaders.base import WaveDataset
 from models.pinn import WavePINN
 from training.trainer import PhysicsTrainer
 from utils.visualization import (
@@ -212,8 +212,6 @@ def main():
             generate=True, 
             samples=args.samples,
             grid_size=args.grid_size,
-            time_steps=args.time_steps,
-            wave_speed=args.wave_speed
         )
         dataset.save_dataset(args.save_data_path)
         print(f"Saved dataset to {args.save_data_path}")
