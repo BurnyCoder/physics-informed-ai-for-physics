@@ -101,6 +101,7 @@ python examples/train_wave.py --grid_size 32 --num_epochs 50
 
 ## Todo
 
+- Compare to trained NN without physics bias
 - Hyperparameter tuning
 - More complex physics problems
 - More complex models
