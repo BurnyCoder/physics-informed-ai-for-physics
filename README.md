@@ -8,6 +8,18 @@ This project implements deep learning models specifically designed for physics p
 - Evaluating model performance
 - Visualizing results
 
+## Examples
+
+### Pendulum Simulation
+
+The pendulum model demonstrates how physics-informed neural networks can predict the motion of a simple pendulum by incorporating physical laws into the learning process.
+
+![Pendulum Simulation Example](examples/pendulum_simulation.gif)
+
+### Wave Propagation
+
+The wave propagation model shows how our approach can simulate complex wave dynamics while respecting the underlying wave equation.
+
 ## Setup
 
 ```bash
