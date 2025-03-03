@@ -184,18 +184,14 @@ def main():
         )
         
         # Get predictions from trained model
-        pred_trajectory = model.predict_trajectory(
+        pred_times, pred_thetas, pred_omegas = model.predict_trajectory(
             initial_theta, initial_omega, num_steps=len(times), dt=times[1]-times[0]
         )
-        pred_thetas = pred_trajectory[:, 0].detach().cpu().numpy()
-        pred_omegas = pred_trajectory[:, 1].detach().cpu().numpy()
         
         # Get predictions from untrained model
-        untrained_trajectory = untrained_model.predict_trajectory(
+        untrained_times, untrained_thetas, untrained_omegas = untrained_model.predict_trajectory(
             initial_theta, initial_omega, num_steps=len(times), dt=times[1]-times[0]
         )
-        untrained_thetas = untrained_trajectory[:, 0].detach().cpu().numpy()
-        untrained_omegas = untrained_trajectory[:, 1].detach().cpu().numpy()
         
         # Generate random predictions
         random_thetas = generate_random_predictions(
@@ -207,8 +203,8 @@ def main():
         
         # Compute physical errors
         true_errors = compute_pendulum_errors(times, true_thetas, true_omegas)
-        pred_errors = compute_pendulum_errors(times, pred_thetas, pred_omegas)
-        untrained_errors = compute_pendulum_errors(times, untrained_thetas, untrained_omegas)
+        pred_errors = compute_pendulum_errors(pred_times, pred_thetas, pred_omegas)
+        untrained_errors = compute_pendulum_errors(untrained_times, untrained_thetas, untrained_omegas)
         random_errors = compute_pendulum_errors(times, random_thetas, random_omegas)
         
         print(f"\nTest trajectory {i+1}:")
